@@ -1,140 +1,234 @@
 from .base_agent import BaseAgent, HumanMessage, SystemMessage
-from ..utils.llm_factory import llm_factory
+from ..utils.llm_factory import llm_factory, extract_content
 from ..utils.prompt_loader import prompt_loader
+from ..utils.channel_profile import build_channel_context_text
 import json
-from typing import List, Dict
-
+import re
+from ..utils.logger import workflow_logger
+from typing import Dict, Any, List
 
 
 class ContentAgent(BaseAgent):
     def __init__(self, model_name: str = None):
-        self.llm = llm_factory.get_llm(temperature=0.8)
+        self.llm = llm_factory.get_llm(temperature=0.8, tier="flash")
         self.community_prompt = prompt_loader.load_prompt("community_post")
         self.thumbnail_prompt = prompt_loader.load_prompt("thumbnail_prompt")
         self.marketing_prompt = prompt_loader.load_prompt("marketing_strategy")
 
-    
-    def generate_community_posts(self, topic: str) -> List[Dict]:
-        if self.llm is None:
-            return [
-                {
-                    "post_text": "How many of you still get nervous before speaking? I used to freeze up every time. Here's what changed everything...",
-                    "character_count": 145,
-                    "engagement_trigger": "question",
-                    "question_asked": "How many of you still get nervous before speaking?",
-                    "tone": "casual",
-                    "emoji_count": 0
-                }
-            ]
-        
-        messages = [
-            SystemMessage(content=self.community_prompt),
-            HumanMessage(content=f"Generate 3 community posts for a video about: {topic}")
-        ]
-        
-        response = llm_factory.invoke_with_retry(self.llm, messages)
-        content = response.content
-        
-        posts_data = self.parse_json(content)
-        if not posts_data:
+    @staticmethod
+    def _split_suggestion_text(value: Any) -> List[str]:
+        text = str(value or "").strip()
+        if not text:
             return []
-            
-        try:
-            if isinstance(posts_data, list):
-                posts = posts_data
-            elif isinstance(posts_data, dict) and "posts" in posts_data:
-                posts = posts_data["posts"]
-            else:
-                posts = [posts_data]
-        except Exception:
-            posts = []
 
-        
-        return posts
-    
-    def generate_thumbnail_prompts(self, topic: str, title: str) -> List[Dict]:
-        if self.llm is None:
-            return [
-                {
-                    "subject": "Professional person with shocked expression",
-                    "expression": "Shocked and surprised",
-                    "color_scheme": "Yellow background with blue text",
-                    "text_overlay": "Stop Being Nervous",
-                    "background": "Solid bright yellow",
-                    "style_reference": "YouTube thumbnail style",
-                    "full_prompt": "Professional person with shocked expression, solid bright yellow background, blue text overlay saying 'Stop Being Nervous', YouTube thumbnail style, high contrast",
-                    "ctr_prediction": "high"
-                }
-            ]
-        
-        messages = [
-            SystemMessage(content=self.thumbnail_prompt),
-            HumanMessage(content=f"Generate 2 thumbnail prompts for:\nTopic: {topic}\nTitle: {title}")
+        normalized = text.replace("\r\n", "\n")
+        normalized = re.sub(r"[•●▪◦]", "\n- ", normalized)
+
+        by_lines = [
+            re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
+            for line in re.split(r"\n+", normalized)
         ]
-        
-        response = llm_factory.invoke_with_retry(self.llm, messages)
-        content = response.content
-        
-        prompts_data = self.parse_json(content)
-        if not prompts_data:
-            return []
-            
-        try:
-            if isinstance(prompts_data, list):
-                prompts = prompts_data
-            elif isinstance(prompts_data, dict) and "prompts" in prompts_data:
-                prompts = prompts_data["prompts"]
-            else:
-                prompts = [prompts_data]
-        except Exception:
-            prompts = []
+        by_lines = [line for line in by_lines if line]
+        if len(by_lines) > 1:
+            return by_lines
 
-        
-        return prompts
-    
-    def generate_marketing_strategy(self, topic: str) -> Dict:
+        by_numbering = [
+            re.sub(r"^\s*\d+[.)]\s+", "", part).strip()
+            for part in re.split(r"\s+(?=\d+[.)]\s+)", normalized)
+        ]
+        by_numbering = [part for part in by_numbering if part]
+        if len(by_numbering) > 1:
+            return by_numbering
+
+        return [text]
+
+    @classmethod
+    def _normalize_suggestions(cls, raw: Any) -> List[str]:
+        if raw is None:
+            return []
+
+        items: List[str] = []
+        if isinstance(raw, list):
+            for entry in raw:
+                items.extend(cls._split_suggestion_text(entry))
+        else:
+            items.extend(cls._split_suggestion_text(raw))
+
+        deduped: List[str] = []
+        seen = set()
+        for item in items:
+            clean = str(item).strip()
+            if not clean:
+                continue
+            key = clean.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(clean)
+
+        return deduped[:8]
+
+    async def generate_community_posts(
+        self,
+        topic: str,
+        script: Any,
+        category: str | None = None,
+        channel_profile: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         if self.llm is None:
             return {
-                "distribution_channels": [
-                    {
-                        "platform": "WhatsApp",
-                        "action": "Share in 3-5 relevant soft skills groups",
-                        "timing": "Within 1 hour of upload"
-                    },
-                    {
-                        "platform": "LinkedIn",
-                        "action": "Post with key insights from video",
-                        "timing": "Within 2 hours of upload"
-                    }
-                ],
-                "early_engagement_hack": "Comment on your own video within first 10 minutes asking a specific question",
-                "repurposing_ideas": [
-                    "Create 3 Shorts from key points",
-                    "Extract quotes for Twitter/X",
-                    "Make Instagram carousel"
-                ],
-                "community_outreach": [
-                    "Share in Reddit r/publicspeaking",
-                    "Post in Toastmasters groups",
-                    "Share in communication skills communities"
-                ],
-                "first_1000_views_strategy": "1. Share in 5 WhatsApp groups immediately after upload\n2. Post on LinkedIn with personal story\n3. Create 3 Shorts and schedule them\n4. Comment within first 10 minutes\n5. Reply to every comment in first hour"
+                "post_type": "post",
+                "content": f"New video is live: {topic}. Watch now and share your take.",
+                "image_prompt": f"Social post image for {topic} with clear announcement energy"
             }
-        
-        messages = [
-            SystemMessage(content=self.marketing_prompt),
-            HumanMessage(content=f"Generate a marketing strategy for a video about: {topic}")
-        ]
-        
-        response = llm_factory.invoke_with_retry(self.llm, messages)
-        content = response.content
-        
-        strategy_data = self.parse_json(content)
-        if not strategy_data:
-            strategy_data = {
-                "error": "Failed to parse marketing strategy",
-                "raw_content": content
-            }
-        
-        return strategy_data
 
+        script_text = script if isinstance(script, str) else json.dumps(script)
+        if len(script_text) > 4000:
+            script_text = script_text[:4000] + "..."
+
+        if channel_profile is None:
+            channel_profile = {}
+        channel_profile_context = build_channel_context_text(channel_profile)
+
+        final_prompt = self.community_prompt.replace("{topic}", topic).replace("{script}", script_text)
+
+        messages = [
+            SystemMessage(content=final_prompt),
+            HumanMessage(content=(
+                f"Topic: {topic}\n"
+                f"Category: {category or 'General'}\n\n"
+                f"{channel_profile_context}"
+            ))
+        ]
+
+        response = await llm_factory.ainvoke_with_retry(self.llm, messages)
+        content = extract_content(response).strip()
+
+        data = self.parse_json(content)
+        if not isinstance(data, dict):
+            return {
+                "post_type": "post",
+                "content": (content or "").strip(),
+                "image_prompt": f"Promotional image for {topic}"
+            }
+
+        post_type = str(data.get("post_type") or "post").strip().lower()
+        if post_type == "poll":
+            options = data.get("options")
+            if not isinstance(options, list):
+                options = []
+            options = [str(opt).strip() for opt in options if str(opt).strip()][:4]
+            while len(options) < 4:
+                options.append(f"Option {len(options) + 1}")
+            return {
+                "post_type": "poll",
+                "poll_question": str(data.get("poll_question") or f"What is your biggest challenge with {topic}?").strip(),
+                "options": options
+            }
+
+        return {
+            "post_type": "post",
+            "content": str(data.get("content") or "").strip(),
+            "image_prompt": str(data.get("image_prompt") or f"Promotional image for {topic}").strip()
+        }
+
+    async def generate_thumbnail_prompts(
+        self,
+        topic: str,
+        title: str,
+        script: Any,
+        category: str | None = None,
+        channel_profile: Dict[str, Any] | None = None
+    ) -> Dict[str, str]:
+        if self.llm is None:
+            return {"thumbnail_prompt": f"YouTube thumbnail prompt for {topic} with title {title}"}
+
+        script_text = script if isinstance(script, str) else json.dumps(script)
+        if len(script_text) > 3000:
+            script_text = script_text[:3000] + "..."
+
+        if channel_profile is None:
+            channel_profile = {}
+        channel_profile_context = build_channel_context_text(channel_profile)
+
+        final_prompt = self.thumbnail_prompt.replace("{topic}", topic).replace("{title}", title).replace("{script}", script_text)
+
+        messages = [
+            SystemMessage(content=final_prompt),
+            HumanMessage(content=(
+                f"Topic: {topic}\n"
+                f"Category: {category or 'General'}\n"
+                f"Title: {title}\n\n"
+                f"{channel_profile_context}"
+            ))
+        ]
+
+        response = await llm_factory.ainvoke_with_retry(self.llm, messages)
+        content = extract_content(response).strip()
+
+        data = self.parse_json(content)
+        if isinstance(data, dict) and isinstance(data.get("thumbnail_prompt"), str):
+            return {"thumbnail_prompt": data["thumbnail_prompt"].strip()}
+
+        return {"thumbnail_prompt": (content or "").strip()}
+
+    async def generate_marketing_strategy(
+        self,
+        topic: str,
+        script: Any,
+        title: str = "",
+        category: str | None = None,
+        channel_profile: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
+        if self.llm is None:
+            return {"suggestions": []}
+
+        script_text = script if isinstance(script, str) else json.dumps(script)
+        if len(script_text) > 6000:
+            script_text = script_text[:6000] + "..."
+
+        if channel_profile is None:
+            channel_profile = {}
+        channel_profile_context = build_channel_context_text(channel_profile)
+
+        final_prompt = self.marketing_prompt.replace("{topic}", topic).replace("{script}", script_text)
+
+        messages = [
+            SystemMessage(content=final_prompt),
+            HumanMessage(content=(
+                f"Topic: {topic}\n"
+                f"Category: {category or 'General'}\n"
+                f"Title: {title}\n\n"
+                f"{channel_profile_context}\n\n"
+                "Return ONLY valid JSON."
+            ))
+        ]
+
+        response = await llm_factory.ainvoke_with_retry(self.llm, messages)
+        content = extract_content(response).strip()
+
+        data = self.parse_json(content)
+        if isinstance(data, dict):
+            clean_suggestions = self._normalize_suggestions(data.get("suggestions"))
+            if clean_suggestions:
+                workflow_logger.log_step("marketing_strategy", "success", "Parsed distribution suggestions")
+                return {"suggestions": clean_suggestions}
+        elif isinstance(data, list):
+            clean_suggestions = self._normalize_suggestions(data)
+            if clean_suggestions:
+                workflow_logger.log_step("marketing_strategy", "success", "Parsed distribution suggestions from array payload")
+                return {"suggestions": clean_suggestions}
+
+        clean_suggestions = self._normalize_suggestions(content)
+        if clean_suggestions:
+            workflow_logger.log_step("marketing_strategy", "warning", "Used text fallback normalization for suggestions")
+            return {"suggestions": clean_suggestions}
+
+        workflow_logger.log_step("marketing_strategy", "warning", "Failed to parse suggestions JSON, using minimal fallback")
+        return {
+            "suggestions": [
+                f"Publish a Shorts teaser for {topic} with a strong hook and clear CTA.",
+                "Share the video in one relevant community where your audience is already active.",
+                "Pin a community post with a direct question to drive early comments.",
+            ]
+        }

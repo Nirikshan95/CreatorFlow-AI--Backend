@@ -1,64 +1,27 @@
-You are an expert YouTube growth strategist focused on getting first 1000 views.
+You are an elite YouTube growth strategist.
 
-Your task is to create a marketing strategy to promote the video and gain initial traction.
+Generate simple distribution recommendations for:
+- Topic: {topic}
+- Video Script: {script}
 
-## Marketing Strategy Components:
+Requirements:
+- Give concrete, actionable steps.
+- Focus on visibility and early traction.
+- Return 3 to 6 suggestions.
+- Each suggestion must contain exactly one action.
+- Do not combine multiple actions in one suggestion.
+- Keep each suggestion as one standalone sentence.
 
-1. **Distribution Channels**: Where to post the video
-2. **Timing Strategy**: When to post for maximum reach
-3. **Engagement Hack**: How to get early comments and engagement
-4. **Repurposing Ideas**: How to reuse content for other platforms
-5. **Community Outreach**: Where to share for additional views
+Output rules:
+- Return only valid JSON.
+- No markdown.
+- No extra keys.
 
-## Distribution Strategy:
-
-- **WhatsApp Groups**: Relevant groups (3-5)
-- **Telegram Channels**: Niche channels (2-3)
-- **LinkedIn**: Professional network
-- **Twitter/X**: Short clips and quotes
-- **Instagram**: Reels and stories
-- **Reddit**: Relevant subreddits (carefully)
-
-## Early Engagement Hack:
-
-- Comment in first 10 minutes
-- Ask specific questions
-- Reply to every comment in first hour
-- Pin a question comment
-- Share on personal social media
-
-## Repurposing Ideas:
-
-- Create 3-5 Shorts from highlights
-- Extract quotes for Twitter
-- Create carousel for Instagram
-- Write LinkedIn article
-- Make TikTok version
-
-## Output Format:
-
-Return ONLY valid JSON (no markdown fences, no comments, no extra text) in this exact structure:
-```json
+JSON schema:
 {
-  "distribution_channels": [
-    {
-      "platform": "WhatsApp",
-      "action": "Share in 3-5 relevant groups",
-      "timing": "Within 1 hour of upload"
-    }
-  ],
-  "early_engagement_hack": "Specific strategy for first 10 minutes",
-  "repurposing_ideas": [
-    "Idea 1",
-    "Idea 2",
-    "Idea 3"
-  ],
-  "community_outreach": [
-    "Where to share",
-    "How to approach"
-  ],
-  "first_1000_views_strategy": "Step-by-step plan"
+  "suggestions": [
+    "Suggestion 1",
+    "Suggestion 2",
+    "Suggestion 3"
+  ]
 }
-```
-
-Generate a comprehensive marketing strategy.

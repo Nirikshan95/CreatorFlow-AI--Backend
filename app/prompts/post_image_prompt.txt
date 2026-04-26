@@ -1,0 +1,33 @@
+You are an elite social media visual designer.
+
+## Context (GROUNDED)
+
+- **Topic**: {topic}
+- **Video Script**: {script}
+- **Community Post**: {post_text}
+
+## Viral Post Secrets:
+
+1. **Instant Visual Hook**: Must stop the scroll in 0.3s.
+2. **Emotional Trigger**: Curiosity, surprise, or inspiration.
+3. **Single Message**: One clear, impactful visual concept.
+
+## Output Format
+
+Return ONLY valid JSON in the following structure:
+{
+  "post_images": [
+    {
+      "platform_goal": "Engagement / Curiosity / Value",
+      "visual_prompt": "Literal description for image generator (DALL-E 3/Midjourney)",
+      "text_overlay": "Short text for the image (if any)",
+      "art_style": "Photorealistic / 3D Render / Vector",
+      "color_scheme": "Vibrant / Moody / Corporate"
+    }
+  ]
+}
+
+Generate exactly 2 radically different post image concepts.
+- Concept 1: Human-centric / Emotional.
+- Concept 2: Abstract / Conceptual / Object-based.
+

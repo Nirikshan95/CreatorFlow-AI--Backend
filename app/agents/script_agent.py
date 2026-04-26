@@ -1,15 +1,54 @@
 from .base_agent import BaseAgent, HumanMessage, SystemMessage
-from ..utils.llm_factory import llm_factory
+from ..utils.llm_factory import llm_factory, extract_content
 from ..utils.prompt_loader import prompt_loader
+from ..utils.channel_profile import build_channel_context_text
+from ..utils.logger import workflow_logger
 import re
-from typing import Any, Dict
+import json
+from typing import Any, Dict, List
 
+
+
+SCRIPT_TYPE_MODIFIERS = {
+    "descriptive": (
+        "Write the script in a descriptive, narrative style. "
+        "Use rich imagery and storytelling. Focus on 'voice-over' feel."
+    ),
+    "fast-paced": (
+        "Write the script in a fast-paced, high-energy style. "
+        "Use short sentences, frequent pattern breaks, and quick transitions."
+    ),
+    "educational": (
+        "Write the script in a clear, educational, and authoritative style. "
+        "Focus on step-by-step implementation and key concepts."
+    ),
+    "story-driven": (
+        "Focus on an emotional arc. Introduce a character or scenario, "
+        "build tension, and provide a climax/resolution."
+    ),
+}
+
+SCRIPT_TYPE_ALIASES = {
+    "conversational": "fast-paced",
+    "storytelling": "story-driven",
+}
 
 
 class ScriptAgent(BaseAgent):
     def __init__(self, model_name: str = None):
-        self.llm = llm_factory.get_llm(temperature=0.8)
+        self.llm = llm_factory.get_llm(temperature=0.7, tier="heavy")
         self.system_prompt = prompt_loader.load_prompt("script_generation")
+
+    def _apply_script_intro(self, text: str, profile: Dict) -> str:
+        """Apply the global script intro line if set in profile."""
+        intro = str(profile.get("script_intro_line") or "").strip()
+        if not intro:
+            return text
+
+        if intro.lower() in text.lower():
+            return text
+
+        return f"{intro}\n\n{text}".strip()
 
     
     def _extract_script_text(self, content: str) -> str:
@@ -36,62 +75,139 @@ class ScriptAgent(BaseAgent):
             else:
                 parts.append(str(value).strip())
 
-        if parts:
-            return "\n\n".join(parts).strip()
+        return "\n\n".join(parts)
 
-        script_text = script_data.get("script")
-        if isinstance(script_text, str):
-            return script_text.strip()
+    def _word_count(self, text: str) -> int:
+        return len(re.findall(r"\w+", text))
 
-        raw_content = script_data.get("raw_content")
-        if isinstance(raw_content, str):
-            return raw_content.strip()
+    def _render_system_prompt(self, topic: str, category: str, style: str) -> str:
+        """Render only supported tokens and leave JSON braces untouched."""
+        prompt = self.system_prompt or ""
+        return (
+            prompt.replace("{topic}", str(topic or ""))
+            .replace("{category}", str(category or "general"))
+            .replace("{style}", str(style or "descriptive"))
+        )
 
-        return ""
+    def _estimate_duration_seconds(self, word_count: int) -> int:
+        # Standard narration speed is ~150 words per minute (2.5 words per second)
+        return int(word_count / 150 * 60)
 
-    @staticmethod
-    def _word_count(text: str) -> int:
-        return len(re.findall(r"\b[\w']+\b", text or ""))
+    def _normalize_script_type(self, script_type: str | None) -> str:
+        normalized = (script_type or "descriptive").strip().lower()
+        normalized = SCRIPT_TYPE_ALIASES.get(normalized, normalized)
+        if normalized not in SCRIPT_TYPE_MODIFIERS:
+            return "descriptive"
+        return normalized
 
-    @staticmethod
-    def _estimate_duration_seconds(word_count: int) -> int:
-        # 145-160 WPM is common for YouTube narration.
-        return max(1, int(round((word_count / 150) * 60)))
-
-    def generate_script(self, topic: str) -> str:
+    async def generate_script(
+        self,
+        topic: str,
+        category: str = "general",
+        script_type: str = "descriptive",
+        channel_profile: Dict[str, Any] | None = None,
+        feedback: str | None = None
+    ) -> str:
         if self.llm is None:
             return (
-                "You do not fail interviews because you lack skill. You fail because nerves steal your voice.\n\n"
-                "Here is the twist. Confidence is not a personality trait. It is a repeatable system.\n\n"
-                "Most people over-prepare answers and under-prepare delivery. That is the real problem.\n\n"
-                "Use this method. First, record two mock answers daily for seven days. "
-                "Second, pause two seconds before each answer to control pace. "
-                "Third, replace vague claims with one proof line from your work. "
-                "Fourth, end every answer with a result and a number. "
-                "Fifth, practice one hard question first, not last.\n\n"
-                "One candidate I coached was rejected four times. "
-                "She used this system for ten days. "
-                "On her fifth interview, she stayed calm and clear. "
-                "She got the offer in forty eight hours.\n\n"
-                "If you want more scripts like this, follow and practice today."
+                f"Today we break down {topic}. "
+                "You will learn the problem, the hidden cause, and a practical action plan. "
+                "Stay until the end for clear next steps you can apply immediately."
             )
+
+        normalized_script_type = self._normalize_script_type(script_type)
+        type_modifier = SCRIPT_TYPE_MODIFIERS.get(
+            normalized_script_type, SCRIPT_TYPE_MODIFIERS["descriptive"]
+        )
+
+        if channel_profile is None:
+            channel_profile = {}
+        channel_profile_context = build_channel_context_text(channel_profile)
+
+        system_content = self._render_system_prompt(
+            topic=topic,
+            category=category or "general",
+            style=normalized_script_type,
+        )
+
+        feedback_portion = f"\n\n### PREVIOUS CRITIQUE / FEEDBACK:\n{feedback}\nPlease address the points above in this new version." if feedback else ""
+
+        human_content = (
+            f"Write the full structured YouTube script now.\n\n"
+            f"Topic: {topic}\n"
+            f"Style: {normalized_script_type}\n"
+            f"Tone/Style Details: {type_modifier}\n\n"
+            f"{channel_profile_context}"
+            f"{feedback_portion}"
+        )
+
+        messages = [
+            SystemMessage(content=system_content),
+            HumanMessage(content=human_content)
+        ]
+
+        try:
+            response = await llm_factory.ainvoke_with_retry(self.llm, messages)
+            content = extract_content(response).strip()
+        except Exception as e:
+            workflow_logger.log_step(
+                "generate_script",
+                "warning",
+                f"LLM call failed, using fallback script: {str(e)}"
+            )
+            return self._apply_script_intro(
+                (
+                    f"Today we break down {topic}. "
+                    "You will learn the problem, the hidden cause, and a practical action plan. "
+                    "Stay until the end for clear next steps you can apply immediately."
+                ),
+                channel_profile,
+            )
+
+        text = self._extract_script_text(content)
+        if not text:
+            text = f"Emergency fallback: This script is about {topic}. The AI output was: {content[:200]}..."
+        return self._apply_script_intro(text, channel_profile)
+
+    async def expand_script(
+        self,
+        script: Any,
+        topic: str,
+        category: str = "general",
+        channel_profile: Dict | None = None
+    ) -> str:
+        """Expand a short script while preserving style and core idea."""
+        script_text = script if isinstance(script, str) else json.dumps(script)
+        workflow_logger.log_step("expand_script", "start", f"Current word count: {self._word_count(script_text)}")
         
         messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"Generate a video script for this topic: {topic}")
+            SystemMessage(content=(
+                "You are an expert script editor. Expand this YouTube script so it feels fuller and more practical. "
+                "Add concrete examples, transitions, and details while keeping the same topic and tone. "
+                "Return only the improved script text."
+            )),
+            HumanMessage(content=(
+                f"Topic: {topic}\n"
+                f"Category: {category}\n"
+                f"Original Script:\n{script_text}\n\n"
+                "Target about 20 to 35 percent longer than the original. Return only script text."
+            ))
         ]
         
-        response = llm_factory.invoke_with_retry(self.llm, messages)
-        content = response.content
-        
-        script_data = self.parse_json(content)
-        if isinstance(script_data, dict):
-            text = self._legacy_script_dict_to_text(script_data)
-            if text:
-                return text
+        try:
+            response = await llm_factory.ainvoke_with_retry(self.llm, messages)
+            content = extract_content(response).strip()
+        except Exception as e:
+            workflow_logger.log_step("expand_script", "warning", f"Expansion skipped due to LLM error: {str(e)}")
+            return script_text
 
-        text = self._extract_script_text(str(content))
-        return text
+        expanded_text = self._extract_script_text(content)
+        if not expanded_text:
+            workflow_logger.log_step("expand_script", "warning", "Expansion returned empty output, using original script.")
+            return script_text
+
+        workflow_logger.log_step("expand_script", "success", f"New word count: {self._word_count(expanded_text)}")
+        return self._apply_script_intro(expanded_text, channel_profile or {})
 
     
     def validate_script(self, script: Any) -> Dict:
@@ -102,7 +218,12 @@ class ScriptAgent(BaseAgent):
         if isinstance(script, str):
             script_text = script.strip()
         elif isinstance(script, dict):
-            script_text = self._legacy_script_dict_to_text(script)
+            # Extract narration from segments if available
+            segments = script.get("segments")
+            if isinstance(segments, list):
+                script_text = "\n\n".join([s.get("narration", "") for s in segments if isinstance(s, dict)]).strip()
+            else:
+                script_text = self._legacy_script_dict_to_text(script)
         else:
             script_text = str(script).strip()
 
@@ -117,16 +238,16 @@ class ScriptAgent(BaseAgent):
             }
 
         word_count = self._word_count(script_text)
-        if word_count < 300:
-            warnings.append("Script is too short (minimum 300 words)")
-        elif word_count > 450:
-            warnings.append("Script is too long (maximum 450 words)")
+        if word_count < 550:
+            warnings.append(f"Script is short ({word_count} words). Target is 600-800.")
+        elif word_count > 900:
+            warnings.append(f"Script is long ({word_count} words). Target is 600-800.")
 
         estimated_duration = self._estimate_duration_seconds(word_count)
-        if estimated_duration < 120:
-            warnings.append("Script is too short (minimum 2 minutes)")
-        elif estimated_duration > 180:
-            warnings.append("Script is too long (maximum 3 minutes)")
+        if estimated_duration < 240:
+            warnings.append("Script duration is under 4 minutes.")
+        elif estimated_duration > 480:
+            warnings.append("Script duration is over 8 minutes.")
 
         return {
             "is_valid": len(errors) == 0,

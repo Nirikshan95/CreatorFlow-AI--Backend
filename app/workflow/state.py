@@ -11,15 +11,19 @@ def merge_dict(a: Dict, b: Dict) -> Dict:
 class ContentState(TypedDict):
     """State for the content generation workflow"""
     past_topics: Annotated[List[str], operator.add]
+    generation_id: str
 
     num_topics: int
     category: Optional[str]
+    channel_profile_id: Optional[str]
+    channel_profile: Optional[Dict]
     
     # Topic generation
     generated_topics: List[Dict]
     selected_topic: Optional[Dict]
     
     # Script generation
+    script_type: Optional[str]
     script: Optional[Any]
     script_validation: Optional[Dict]
     
@@ -27,13 +31,17 @@ class ContentState(TypedDict):
     titles: List[Dict]
     selected_title: Optional[Dict]
     description: Optional[Any]
+    seo_package: Optional[Dict]
     
     # Content generation
-    community_posts: List[Dict]
+    community_posts: Optional[Any]
     selected_community_post: Optional[Dict]
-    thumbnail_prompts: List[Dict]
+    thumbnail_prompts: Optional[Any]
     selected_thumbnail_prompt: Optional[Dict]
+    post_image_prompts: List[Dict]
+    selected_post_image_prompt: Optional[Dict]
     marketing_strategy: Optional[Dict]
+    critique: Optional[Dict]
     
     # Final output
     final_content: Optional[Dict]

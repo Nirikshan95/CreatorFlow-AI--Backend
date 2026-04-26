@@ -26,8 +26,8 @@ async def test_workflow():
     
     print("Running workflow...")
     try:
-        # We'll use invoke for simplicity in this test
-        result = workflow.graph.invoke(initial_state)
+        # We'll use ainvoke since some nodes are async
+        result = await workflow.graph.ainvoke(initial_state)
         
         print("\n--- Workflow Result ---")
         if result.get("final_content"):

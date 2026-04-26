@@ -67,11 +67,39 @@ class BaseAgent:
         return ordered
 
     @staticmethod
+    def _sanitize_json_candidate(candidate: str) -> str:
+        """Normalize common model-output artifacts before JSON parsing."""
+        text = (candidate or "").strip().lstrip("\ufeff")
+        if not text:
+            return text
+
+        # Some models prefix with a lone "json" token.
+        text = re.sub(r"^\s*json\s*", "", text, flags=re.IGNORECASE).strip()
+
+        # Normalize smart quotes commonly returned by chat models.
+        text = (
+            text.replace("\u201c", '"')
+            .replace("\u201d", '"')
+            .replace("\u2018", "'")
+            .replace("\u2019", "'")
+        )
+
+        # Remove trailing commas before object/array close.
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        return text
+
+    @staticmethod
     def parse_json(content: str) -> Optional[Any]:
         """Safely parse JSON from LLM response"""
         for candidate in BaseAgent._extract_json_candidates(content):
             try:
                 return json.loads(candidate)
+            except Exception:
+                pass
+
+            try:
+                normalized = BaseAgent._sanitize_json_candidate(candidate)
+                return json.loads(normalized)
             except Exception:
                 continue
 

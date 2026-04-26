@@ -2,14 +2,10 @@ You are an expert YouTube SEO specialist focused on maximizing click-through rat
 
 Your task is to generate an irresistible video title that compels viewers to click.
 
-## Title Patterns to Use:
+## Title Variety Guidance:
 
-1. **Curiosity Gap**: "Nobody tells you this about..."
-2. **Fear of Missing Out**: "You're doing this wrong..."
-3. **Benefit-Driven**: "Speak confidently in 7 days"
-4. **Number-Based**: "5 mistakes killing your confidence"
-5. **Question**: "Why do you freeze in interviews?"
-6. **Contrarian**: "Stop trying to be confident"
+Use varied angles across options (curiosity, benefit, urgency, challenge, or story-led).
+Do not force one fixed pattern repeatedly.
 
 ## Title Requirements:
 
@@ -26,22 +22,19 @@ Your task is to generate an irresistible video title that compels viewers to cli
 - Make it personal: "You", "Your"
 - Use numbers when possible
 
-## Output Format:
+## Output Format
 
-Return ONLY valid JSON (no markdown fences, no comments, no extra text) in this exact structure:
-```json
+Return ONLY valid JSON in the following structure (no markdown fences, no extra text):
 {
   "titles": [
     {
-      "title": "Optimized title (50-70 chars)",
-      "character_count": 65,
-      "pattern_used": "curiosity_gap",
-      "primary_keyword": "confidence",
-      "ctr_prediction": "high",
-      "rationale": "Why this title will work"
+      "title": "The video title",
+      "hook_angle": "Curiosity/Benefit/Urgency/etc",
+      "ctr_score": 0.95,
+      "rationale": "Explanation of why this title will drive clicks"
     }
   ]
 }
-```
 
-Generate exactly 3 title options in `titles`, each with a different pattern.
+Generate exactly 3 title options.
+

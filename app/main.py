@@ -2,8 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
-from pathlib import Path
+from dotenv import load_dotenv
 from .api.routes import router
+
+load_dotenv()
 
 app = FastAPI(
     title="YouTube Content Intelligence Engine",
@@ -33,7 +35,7 @@ async def root():
 async def health_check():
     return {
         "status": "healthy",
-        "database": "connected" if Path(os.getenv("DATABASE_PATH", "data/content_history.db")).exists() else "not_initialized"
+        "database": "connected" if os.getenv("DATABASE_PATH", "data/content_history.db") else "not_initialized"
     }
 
 if __name__ == "__main__":
