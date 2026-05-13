@@ -1,12 +1,10 @@
 from langgraph.graph import StateGraph, END
 from typing import Dict, List, Any
 import uuid
-import json
 from ..agents.topic_agent import TopicAgent
 from ..agents.script_agent import ScriptAgent
 from ..agents.seo_agent import SEOAgent
 from ..agents.content_agent import ContentAgent
-from ..agents.critic_agent import CriticAgent
 from ..models import SessionLocal, ContentHistory
 
 from .state import ContentState, WorkflowConfig
@@ -23,7 +21,6 @@ class ContentWorkflow:
         self.script_agent = ScriptAgent()
         self.seo_agent = SEOAgent()
         self.content_agent = ContentAgent()
-        self.critic_agent = CriticAgent()
         self.graph = self._build_graph()
 
     @staticmethod
@@ -102,7 +99,6 @@ class ContentWorkflow:
         workflow.add_node("generate_seo", self._generate_seo)
         workflow.add_node("generate_content", self._generate_content)
         workflow.add_node("generate_post_image", self._generate_post_image)
-        workflow.add_node("critique_content", self._critique_content)
         workflow.add_node("assemble_final_content", self._assemble_final_content)
         workflow.add_node("save_to_database", self._save_to_database)
 
@@ -126,20 +122,7 @@ class ContentWorkflow:
         workflow.add_edge("generate_script", "validate_script")
         workflow.add_edge("generate_seo", "generate_content")
         workflow.add_edge("generate_content", "generate_post_image")
-        workflow.add_edge("generate_post_image", "critique_content")
-        
-        # New: Refinement loop
-        workflow.add_node("refine_content", self._refine_content)
-        workflow.add_conditional_edges(
-            "critique_content",
-            self._should_refine_content,
-            {
-                "refine": "refine_content",
-                "continue": "assemble_final_content",
-                "fail": END
-            }
-        )
-        workflow.add_edge("refine_content", "generate_script")
+        workflow.add_edge("generate_post_image", "assemble_final_content")
 
         workflow.add_edge("assemble_final_content", "save_to_database")
         workflow.add_edge("save_to_database", END)
@@ -271,18 +254,13 @@ class ContentWorkflow:
             if not selected_topic:
                 raise ValueError("No topic selected")
             
-            critique = state.get("critique") or {}
-            feedback = None
-            if not critique.get("is_passed", True):
-                feedback = critique.get("feedback")
-
             script_type = state.get("script_type", "descriptive") or "descriptive"
             script = await self.script_agent.generate_script(
                 selected_topic["topic"],
                 category=state.get("category"),
                 script_type=script_type,
                 channel_profile=state.get("channel_profile"),
-                feedback=feedback
+                feedback=None
             )
             if not script:
                 raise ValueError("Generated script was empty or None")
@@ -347,33 +325,6 @@ class ContentWorkflow:
         return "continue"
     
 
-    def _refine_content(self, state: ContentState) -> Dict:
-        """Integration node to prepare for regeneration after critique"""
-        workflow_logger.log_step("refine_content", "start")
-        critique = state.get("critique")
-        retries = (state.get("retries") or {}).get("refinement", 0)
-        
-        return {
-            "retries": {"refinement": retries + 1},
-            "errors": [f"Critic requested refinement: {critique.get('feedback', 'Quality below threshold')}"]
-        }
-
-    def _should_refine_content(self, state: ContentState) -> str:
-        """Conditional logic for refinement loop"""
-        critique = state.get("critique") or {}
-        retries = (state.get("retries") or {}).get("refinement", 0)
-
-        if not critique.get("is_passed", True):
-            if retries < self.config.max_retries:
-                workflow_logger.log_step("workflow_router", "info", f"Critic requested refinement (Pass {retries+1}/{self.config.max_retries}).")
-                return "refine"
-            else:
-                workflow_logger.log_step("workflow_router", "error", "Max refinement attempts reached. Terminating generation due to quality failure.")
-                return "fail"
-        
-        return "continue"
-
-
     async def _generate_seo(self, state: ContentState) -> Dict:
         """Generate SEO content using SEOAgent (Parallelized)"""
         workflow_logger.log_step("generate_seo", "start")
@@ -396,9 +347,6 @@ class ContentWorkflow:
             workflow_logger.log_step("generate_seo", "error", "Script is required for description generation")
             return {"errors": ["Cannot proceed: Script is required for description generation but is missing"]}
 
-        critique = state.get("critique") or {}
-        feedback = critique.get("feedback") if not critique.get("is_passed", True) else None
-
         try:
             keywords = selected.get("keywords", [])
             working_title = (state.get("selected_title") or {}).get("title", "")
@@ -409,7 +357,7 @@ class ContentWorkflow:
                 keywords=keywords,
                 category=state.get("category"),
                 channel_profile=state.get("channel_profile"),
-                feedback=feedback,
+                feedback=None,
                 script=script
             )
 
@@ -534,47 +482,6 @@ class ContentWorkflow:
             workflow_logger.log_step("generate_post_image", "error", str(e))
             return {"errors": [f"Post image prompt generation failed: {str(e)}"]}
 
-    async def _critique_content(self, state: ContentState) -> Dict:
-        """Perform final quality review using CriticAgent (Heavy Tier)"""
-        workflow_logger.log_step("critique_content", "start")
-        
-        # Validate required inputs
-        selected = state.get("selected_topic")
-        script = state.get("script")
-        
-        if not selected:
-            workflow_logger.log_step("critique_content", "error", "No topic selected for critique")
-            return {"errors": ["Cannot proceed: No topic selected for critique"]}
-        
-        
-        topic = selected.get("topic")
-        if not topic or not isinstance(topic, str) or not topic.strip():
-            workflow_logger.log_step("critique_content", "error", "Topic is empty or invalid")
-            return {"errors": ["Cannot proceed: Topic is empty or invalid"]}
-        
-        
-        if not script:
-            workflow_logger.log_step("critique_content", "error", "Script is required for critique")
-            return {"errors": ["Cannot proceed: Script is required for critique but is missing"]}
-        
-        
-        try:
-            title = (state.get("selected_title") or {}).get("title", "")
-            script_for_critique = script if isinstance(script, str) else json.dumps(script)
-            critique = await self.critic_agent.critique_content(
-                topic=topic,
-                title=title,
-                script=script_for_critique,
-                keywords=selected.get("keywords", [])
-            )
-            workflow_logger.log_step("critique_content", "success", f"Rating: {critique.get('rating')}")
-            return {"critique": critique}
-        except Exception as e:
-            workflow_logger.log_step("critique_content", "warning", f"Critique skipped: {str(e)}")
-            return {
-                "critique": {"rating": 5.0, "is_passed": True, "feedback": "Critique skipped due provider connectivity issue."}
-            }
-
     def _assemble_final_content(self, state: ContentState) -> Dict:
         """Assemble all generated pieces into the final output format"""
         workflow_logger.log_step("assemble_final_content", "start")
@@ -597,7 +504,7 @@ class ContentWorkflow:
 
             thumbnail_prompt = self._normalize_thumbnail_prompt(state.get("thumbnail_prompts") or {})
             distribution_strategy = self._normalize_distribution(state.get("marketing_strategy") or {})
-            quality_assessment = self._normalize_quality_assessment(state.get("critique"))
+            quality_assessment = {}
 
             final_content = {
                 "topic": topic,
@@ -635,12 +542,11 @@ class ContentWorkflow:
         try:
             video_id = str(uuid.uuid4())
             selected_topic = state.get("selected_topic") or {}
-            critique = state.get("critique") or {}
             seo = (final_content.get("seo") or {})
             post_creation = final_content.get("post_creation")
             thumbnail_prompt = final_content.get("thumbnail_prompt")
             distribution_strategy = final_content.get("distribution_strategy") or {}
-            quality_assessment = final_content.get("quality_assessment") or critique
+            quality_assessment = final_content.get("quality_assessment") or {}
             script_data = self._normalize_script(final_content.get("script"))
             history = ContentHistory(
                 id=str(uuid.uuid4()),
@@ -717,9 +623,8 @@ class ContentWorkflow:
             "community_posts": {},
             "thumbnail_prompts": {},
             "marketing_strategy": {},
-            "critique": None,
             "final_content": None,
             "errors": [],
-            "retries": {"topic": 0, "script": 0, "refinement": 0},
+            "retries": {"topic": 0, "script": 0},
             "max_retries": self.config.max_retries
         }

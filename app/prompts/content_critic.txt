@@ -12,6 +12,14 @@ EVALUATION CRITERIA:
 2. Value Density: Is there enough "meat" or value in the steps provided?
 3. SEO Alignment: Does the title and description match the topic intent?
 4. Audience Retention: Are there pattern breaks or engagement triggers mentioned?
+5. Description Depth: Is the description comprehensive, specific, and conversion-focused rather than brief?
+6. Visual Prompt Quality: Are thumbnail and post-image prompts detailed enough to produce high-quality, non-generic outputs?
+
+QUALITY STANDARD:
+- Be strict and specific; avoid vague praise.
+- Flag shallow or generic outputs clearly.
+- Suggestions must be actionable rewrites, not abstract advice.
+- When quality is weak, explain exactly what is missing (clarity, specificity, emotional pull, structure, or visual detail).
 
 OUTPUT FORMAT:
 Return ONLY valid JSON (no markdown fences, no comments, no extra text) in this exact structure:

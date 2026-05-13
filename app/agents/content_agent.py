@@ -68,6 +68,30 @@ class ContentAgent(BaseAgent):
 
         return deduped[:8]
 
+    @staticmethod
+    def _normalize_image_prompt_intent(prompt: str) -> str:
+        text = re.sub(r"\s+", " ", str(prompt or "")).strip().strip('"')
+        if not text:
+            return ""
+
+        allowed_starts = (
+            "generate an image of",
+            "create a realistic image of",
+            "professional photography of",
+        )
+        lowered = text.lower()
+        if any(lowered.startswith(start) for start in allowed_starts):
+            return text
+
+        # Remove common leading labels before enforcing intent prefix.
+        text = re.sub(
+            r"^(?:thumbnail prompt|post image prompt|image prompt|prompt)\s*:\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        return f"Generate an image of {text}".strip()
+
     async def generate_community_posts(
         self,
         topic: str,
@@ -161,9 +185,9 @@ class ContentAgent(BaseAgent):
 
         data = self.parse_json(content)
         if isinstance(data, dict) and isinstance(data.get("post_image_prompt"), str):
-            return {"post_image_prompt": data["post_image_prompt"].strip()}
+            return {"post_image_prompt": self._normalize_image_prompt_intent(data["post_image_prompt"])}
 
-        return {"post_image_prompt": (content or "").strip()}
+        return {"post_image_prompt": self._normalize_image_prompt_intent(content)}
 
     async def generate_thumbnail_prompts(
         self,
@@ -199,9 +223,9 @@ class ContentAgent(BaseAgent):
 
         data = self.parse_json(content)
         if isinstance(data, dict) and isinstance(data.get("thumbnail_prompt"), str):
-            return {"thumbnail_prompt": data["thumbnail_prompt"].strip()}
+            return {"thumbnail_prompt": self._normalize_image_prompt_intent(data["thumbnail_prompt"])}
 
-        return {"thumbnail_prompt": (content or "").strip()}
+        return {"thumbnail_prompt": self._normalize_image_prompt_intent(content)}
 
     async def generate_marketing_strategy(
         self,
