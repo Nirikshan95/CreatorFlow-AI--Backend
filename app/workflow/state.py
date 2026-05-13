@@ -11,6 +11,7 @@ def merge_dict(a: Dict, b: Dict) -> Dict:
 class ContentState(TypedDict):
     """State for the content generation workflow"""
     past_topics: Annotated[List[str], operator.add]
+    past_topics_summary: str
     generation_id: str
 
     num_topics: int

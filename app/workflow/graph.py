@@ -99,47 +99,34 @@ class ContentWorkflow:
         workflow.add_node("select_best_topic", self._select_best_topic)
         workflow.add_node("generate_script", self._generate_script)
         workflow.add_node("validate_script", self._validate_script)
-        workflow.add_node("expand_script", self._expand_script)
         workflow.add_node("generate_seo", self._generate_seo)
         workflow.add_node("generate_content", self._generate_content)
+        workflow.add_node("generate_post_image", self._generate_post_image)
         workflow.add_node("critique_content", self._critique_content)
         workflow.add_node("assemble_final_content", self._assemble_final_content)
         workflow.add_node("save_to_database", self._save_to_database)
-        workflow.add_node("validate_topic", self._validate_topic)
 
         
         # Add edges
         workflow.set_entry_point("fetch_past_topics")
         workflow.add_edge("fetch_past_topics", "generate_topics")
         workflow.add_edge("generate_topics", "select_best_topic")
-        workflow.add_edge("select_best_topic", "validate_topic")
-        
-        # Conditional edge for topic quality
-        workflow.add_conditional_edges(
-            "validate_topic",
-            self._should_regenerate_topic,
-            {
-                "regenerate": "generate_topics",
-                "continue": "generate_script",
-                "fail": END
-            }
-        )
+        workflow.add_edge("select_best_topic", "generate_script")
         
         workflow.add_conditional_edges(
             "validate_script",
             self._should_regenerate_script,
             {
                 "regenerate": "generate_script",
-                "expand": "expand_script",
                 "continue": "generate_seo",
                 "fail": END
             }
         )
 
-        workflow.add_edge("expand_script", "validate_script")
         workflow.add_edge("generate_script", "validate_script")
         workflow.add_edge("generate_seo", "generate_content")
-        workflow.add_edge("generate_content", "critique_content")
+        workflow.add_edge("generate_content", "generate_post_image")
+        workflow.add_edge("generate_post_image", "critique_content")
         
         # New: Refinement loop
         workflow.add_node("refine_content", self._refine_content)
@@ -166,11 +153,17 @@ class ContentWorkflow:
         try:
             history = db.query(ContentHistory).order_by(ContentHistory.created_at.desc()).limit(50).all()
             topics = [h.topic for h in history]
+            summary = self.topic_agent.build_past_topics_summary(topics)
             workflow_logger.log_step("fetch_past_topics", "success", f"Found {len(topics)} past topics")
-            return {"past_topics": topics}
+            workflow_logger.log_step("fetch_past_topics", "info", f"Using compact memory summary ({len(summary.split())} words)")
+            return {"past_topics": topics, "past_topics_summary": summary}
         except Exception as e:
             workflow_logger.log_step("fetch_past_topics", "error", str(e))
-            return {"past_topics": [], "errors": [f"DB history failed: {str(e)}"]}
+            return {
+                "past_topics": [],
+                "past_topics_summary": "No prior topics recorded.",
+                "errors": [f"DB history failed: {str(e)}"]
+            }
         finally:
             db.close()
 
@@ -182,6 +175,7 @@ class ContentWorkflow:
                 num_topics=state["num_topics"],
                 category=state.get("category"),
                 past_topics=state.get("past_topics", []),
+                past_topics_summary=state.get("past_topics_summary", ""),
                 channel_profile=state.get("channel_profile")
             )
             
@@ -265,73 +259,7 @@ class ContentWorkflow:
             }
 
 
-    def _validate_topic(self, state: ContentState) -> Dict:
-        """Validate the selected topic for quality and novelty"""
-        workflow_logger.log_step("validate_topic", "start")
-        try:
-            selected_topic = state.get("selected_topic")
-            if not selected_topic:
-                raise ValueError("No topic selected to validate")
-            
-            # Use SimilarityChecker
-            past_topics = state.get("past_topics", [])
-            checker = SimilarityChecker(similarity_threshold=self.config.similarity_threshold)
-            
-            result = checker.check_similarity_with_history(
-                selected_topic["topic"],
-                past_topics
-            )
-            
-            # Increment topic retries if bad quality
-            is_bad = result["is_too_similar"] or selected_topic.get("virality_score", 0) < self.config.min_virality_score
-            retries = state.get("retries", {})
-            topic_retries = retries.get("topic", 0)
-            
-            updates = {
-                "selected_topic": {**selected_topic, "similarity_check": result}
-            }
-            
-            if is_bad:
-                updates["retries"] = {**retries, "topic": topic_retries + 1}
-                updates["num_topics"] = max(2, (state.get("num_topics") or 5) + 1) # Generate more next time
-                updates["errors"] = [f"Topic quality check failed (novelty={1-result['max_similarity']:.2f}). Retrying..."]
 
-            return updates
-            
-        except Exception as e:
-            workflow_logger.log_step("validate_topic", "error", str(e))
-            retries = state.get("retries", {})
-            return {
-                "errors": [f"Topic validation failed: {str(e)}"],
-                "retries": {**retries, "topic": retries.get("topic", 0) + 1}
-            }
-
-    def _should_regenerate_topic(self, state: ContentState) -> str:
-        """Decide whether to regenerate the topic based on quality and retries"""
-        retries = (state.get("retries") or {}).get("topic", 0)
-        selected_topic = state.get("selected_topic")
-        
-        # SAFETY BREAK: If we've hit max retries, STOP
-        if retries >= self.config.max_retries:
-            workflow_logger.log_step("workflow_router", "error", f"Topic retry limit reached ({retries}). Terminating generation phase.")
-            return "fail"
-
-        if not selected_topic:
-            workflow_logger.log_step("workflow_router", "info", f"Topic missing (Attempt {retries}). Regenerating...")
-            return "regenerate"
-            
-        sim_check = (selected_topic or {}).get("similarity_check", {})
-        is_too_similar = sim_check.get("is_too_similar", False)
-        virality = (selected_topic or {}).get("virality_score", 0)
-        
-        is_bad_quality = is_too_similar or virality < self.config.min_virality_score
-        
-        if is_bad_quality:
-            workflow_logger.log_step("workflow_router", "info", f"Topic quality poor (Attempt {retries}). Regenerating...")
-            return "regenerate"
-        
-        workflow_logger.log_step("workflow_router", "success", "Topic quality accepted. Proceeding to scripting.")
-        return "continue"
 
     
     async def _generate_script(self, state: ContentState) -> Dict:
@@ -396,60 +324,11 @@ class ContentWorkflow:
                 "retries": {**retries, "script": script_retry_count + 1}
             }
 
-    async def _expand_script(self, state: ContentState) -> Dict:
-        """Expansion pass for short scripts (Heavy Tier)"""
-        workflow_logger.log_step("expand_script_node", "start")
-        try:
-            script = state.get("script")
-            selected = state.get("selected_topic")
-            if not script or not selected:
-                return {}
-
-            expanded = await self.script_agent.expand_script(
-                script,
-                selected["topic"],
-                category=state.get("category"),
-                channel_profile=state.get("channel_profile")
-            )
-            
-            retries = state.get("retries", {})
-            expansion_count = retries.get("expansion", 0)
-            
-            # Reset validation so it gets re-run, and increment expansion count
-            return {
-                "script": expanded, 
-                "script_validation": None,
-                "retries": {**retries, "expansion": expansion_count + 1}
-            }
-        except Exception as e:
-            workflow_logger.log_step("expand_script_node", "error", str(e))
-            retries = state.get("retries", {})
-            expansion_count = retries.get("expansion", 0)
-            return {
-                "errors": [f"Failed to expand script: {str(e)}"],
-                "retries": {**retries, "expansion": expansion_count + 1}
-            }
-
-    def _should_expand_script(self, state: ContentState) -> str:
-        """Decide if script needs expansion based on word count"""
-        validation = state.get("script_validation")
-        if not validation:
-            return "continue"
-        
-        # If valid but short, and we haven't reached max retries
-        word_count = validation.get("word_count", 0)
-        retries = (state.get("retries") or {}).get("expansion", 0)
-        
-        if word_count > 0 and word_count < 550 and retries < 1: # Only 1 expansion pass
-            return "expand"
-        
-        return "continue"
 
     def _should_regenerate_script(self, state: ContentState) -> str:
-        """Decide whether to regenerate, expand, or continue based on validation"""
+        """Decide whether to regenerate or continue based on validation"""
         validation = state.get("script_validation")
         retries = (state.get("retries") or {}).get("script", 0)
-        expansion_retries = (state.get("retries") or {}).get("expansion", 0)
 
         # SAFETY BREAK: If we've hit max retries, STOP
         if retries >= self.config.max_retries:
@@ -459,17 +338,10 @@ class ContentWorkflow:
         if not validation:
             return "continue"
         
-        # 1. Critical failure check (Invalid or empty)
+        # Critical failure check (Invalid or empty)
         if not validation.get("is_valid", False):
             workflow_logger.log_step("workflow_router", "info", f"Script invalid (Attempt {retries}). Regenerating...")
             return "regenerate"
-
-        # 2. Length check (Expansion pass)
-        word_count = validation.get("word_count", 0)
-        
-        if word_count > 0 and word_count < 550 and expansion_retries < 1:
-            workflow_logger.log_step("workflow_router", "info", "Script too short. Triggering expansion pass.")
-            return "expand"
         
         workflow_logger.log_step("workflow_router", "success", "Script validated. Proceeding to SEO phase.")
         return "continue"
@@ -591,11 +463,20 @@ class ContentWorkflow:
         title = (state.get("selected_title") or {}).get("title", f"About {topic}")
         category = state.get("category")
         profile = state.get("channel_profile")
+        seo_package = state.get("seo_package") or {}
+        hashtags = seo_package.get("hashtags", [])
 
         # PHASE 1: PARALLEL EXECUTION
         import asyncio
         tasks = [
-            self.content_agent.generate_community_posts(topic, script, category, profile),
+            self.content_agent.generate_community_posts(
+                topic,
+                script,
+                title=title,
+                hashtags=hashtags,
+                category=category,
+                channel_profile=profile
+            ),
             self.content_agent.generate_thumbnail_prompts(
                 topic,
                 title,
@@ -632,6 +513,26 @@ class ContentWorkflow:
         except Exception as e:
             workflow_logger.log_step("generate_content", "error", f"Parallel block failed: {str(e)}")
             return {"errors": [f"Content marketing phase failed: {str(e)}"]}
+
+    async def _generate_post_image(self, state: ContentState) -> Dict:
+        """Generate an image prompt specifically for the community post"""
+        workflow_logger.log_step("generate_post_image", "start")
+        try:
+            topic = str((state.get("selected_topic") or {}).get("topic") or "").strip()
+            script = state.get("script")
+            posts = state.get("community_posts") or {}
+            
+            if isinstance(posts, dict) and posts.get("post_type") == "post" and posts.get("content"):
+                workflow_logger.log_step("generate_post_image", "info", "Generating image prompt for community post...")
+                result = await self.content_agent.generate_post_image_prompt(topic, script, posts.get("content"))
+                workflow_logger.log_step("generate_post_image", "success", "Generated post image prompt")
+                return {"post_image_prompts": [result]}
+            
+            workflow_logger.log_step("generate_post_image", "info", "Skipped post image prompt (not a regular post)")
+            return {"post_image_prompts": []}
+        except Exception as e:
+            workflow_logger.log_step("generate_post_image", "error", str(e))
+            return {"errors": [f"Post image prompt generation failed: {str(e)}"]}
 
     async def _critique_content(self, state: ContentState) -> Dict:
         """Perform final quality review using CriticAgent (Heavy Tier)"""
@@ -688,6 +589,12 @@ class ContentWorkflow:
                 fallback_description=str(state.get("description") or "").strip(),
             )
             post_creation = self._normalize_post_creation(state.get("community_posts") or {})
+            
+            # Inject the separate post image prompt if applicable
+            image_prompts = state.get("post_image_prompts") or []
+            if post_creation.get("post_type") == "post" and image_prompts:
+                post_creation["image_prompt"] = str(image_prompts[0].get("post_image_prompt", "")).strip()
+
             thumbnail_prompt = self._normalize_thumbnail_prompt(state.get("thumbnail_prompts") or {})
             distribution_strategy = self._normalize_distribution(state.get("marketing_strategy") or {})
             quality_assessment = self._normalize_quality_assessment(state.get("critique"))
@@ -696,6 +603,7 @@ class ContentWorkflow:
                 "topic": topic,
                 "title": title,
                 "script": script,
+                "past_topics_summary": str(state.get("past_topics_summary") or "").strip(),
                 "seo": seo,
                 "post_creation": post_creation,
                 "thumbnail_prompt": thumbnail_prompt,
@@ -797,6 +705,7 @@ class ContentWorkflow:
             # Accept both snake_case (API) and legacy camelCase payload keys.
             "script_type": params.get("script_type") or params.get("scriptType", "descriptive"),
             "past_topics": [],
+            "past_topics_summary": "",
             "generated_topics": [],
             "selected_topic": None,
             "script": None,
@@ -811,6 +720,6 @@ class ContentWorkflow:
             "critique": None,
             "final_content": None,
             "errors": [],
-            "retries": {"topic": 0, "script": 0, "expansion": 0, "refinement": 0},
+            "retries": {"topic": 0, "script": 0, "refinement": 0},
             "max_retries": self.config.max_retries
         }

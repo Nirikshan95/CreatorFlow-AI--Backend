@@ -61,6 +61,18 @@ class SEOAgent(BaseAgent):
         lowered = raw.lower()
         return '"video_title"' in lowered or '"description"' in lowered or '"hashtags"' in lowered
 
+    def _render_system_prompt(self, topic: str, category: str, title: str, keywords: List[str], script: str, channel_info: str, feedback: str) -> str:
+        prompt = self.seo_prompt or ""
+        return (
+            prompt.replace("{topic}", str(topic or ""))
+            .replace("{category}", str(category or "General"))
+            .replace("{title}", str(title or ""))
+            .replace("{keywords}", ", ".join(keywords) if keywords else "")
+            .replace("{script}", self.compact_script_context(script, max_chars=1800))
+            .replace("{channel_info}", str(channel_info or "No specific channel context."))
+            .replace("{feedback}", str(feedback or "No previous feedback."))
+        )
+
     async def generate_seo_package(
         self,
         topic: str,
@@ -82,26 +94,19 @@ class SEOAgent(BaseAgent):
             channel_profile = {}
         channel_profile_context = build_channel_context_text(channel_profile)
 
-        feedback_portion = (
-            f"\n\n### PREVIOUS CRITIQUE / FEEDBACK:\n{feedback}\nPlease improve based on this feedback."
-            if feedback else ""
-        )
-        script_portion = (
-            f"\n\n### SCRIPT CONTENT:\n{script}\nUse key points from the script in the description."
-            if script else ""
+        system_content = self._render_system_prompt(
+            topic=topic,
+            category=category,
+            title=title,
+            keywords=keywords,
+            script=script,
+            channel_info=channel_profile_context,
+            feedback=feedback
         )
 
         messages = [
-            SystemMessage(content=self.seo_prompt),
-            HumanMessage(content=(
-                f"Topic: {topic}\n"
-                f"Category: {category or 'General'}\n"
-                f"Current Working Title: {title}\n"
-                f"Keywords: {', '.join(keywords)}\n"
-                f"{script_portion}"
-                f"{channel_profile_context}"
-                f"{feedback_portion}"
-            ))
+            SystemMessage(content=system_content),
+            HumanMessage(content="Please generate the SEO package now.")
         ]
 
         response = await llm_factory.ainvoke_with_retry(self.llm, messages)

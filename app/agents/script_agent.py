@@ -80,13 +80,15 @@ class ScriptAgent(BaseAgent):
     def _word_count(self, text: str) -> int:
         return len(re.findall(r"\w+", text))
 
-    def _render_system_prompt(self, topic: str, category: str, style: str) -> str:
+    def _render_system_prompt(self, topic: str, category: str, style: str, channel_info: str = "") -> str:
         """Render only supported tokens and leave JSON braces untouched."""
         prompt = self.system_prompt or ""
         return (
             prompt.replace("{topic}", str(topic or ""))
             .replace("{category}", str(category or "general"))
             .replace("{style}", str(style or "descriptive"))
+            .replace("{channel_info}", channel_info)
+            .replace("{target_audience}", "General YouTube Audience")
         )
 
     def _estimate_duration_seconds(self, word_count: int) -> int:
@@ -128,6 +130,7 @@ class ScriptAgent(BaseAgent):
             topic=topic,
             category=category or "general",
             style=normalized_script_type,
+            channel_info=channel_profile_context if channel_profile else ""
         )
 
         feedback_portion = f"\n\n### PREVIOUS CRITIQUE / FEEDBACK:\n{feedback}\nPlease address the points above in this new version." if feedback else ""
@@ -136,8 +139,7 @@ class ScriptAgent(BaseAgent):
             f"Write the full structured YouTube script now.\n\n"
             f"Topic: {topic}\n"
             f"Style: {normalized_script_type}\n"
-            f"Tone/Style Details: {type_modifier}\n\n"
-            f"{channel_profile_context}"
+            f"Tone/Style Details: {type_modifier}\n"
             f"{feedback_portion}"
         )
 
@@ -169,45 +171,6 @@ class ScriptAgent(BaseAgent):
             text = f"Emergency fallback: This script is about {topic}. The AI output was: {content[:200]}..."
         return self._apply_script_intro(text, channel_profile)
 
-    async def expand_script(
-        self,
-        script: Any,
-        topic: str,
-        category: str = "general",
-        channel_profile: Dict | None = None
-    ) -> str:
-        """Expand a short script while preserving style and core idea."""
-        script_text = script if isinstance(script, str) else json.dumps(script)
-        workflow_logger.log_step("expand_script", "start", f"Current word count: {self._word_count(script_text)}")
-        
-        messages = [
-            SystemMessage(content=(
-                "You are an expert script editor. Expand this YouTube script so it feels fuller and more practical. "
-                "Add concrete examples, transitions, and details while keeping the same topic and tone. "
-                "Return only the improved script text."
-            )),
-            HumanMessage(content=(
-                f"Topic: {topic}\n"
-                f"Category: {category}\n"
-                f"Original Script:\n{script_text}\n\n"
-                "Target about 20 to 35 percent longer than the original. Return only script text."
-            ))
-        ]
-        
-        try:
-            response = await llm_factory.ainvoke_with_retry(self.llm, messages)
-            content = extract_content(response).strip()
-        except Exception as e:
-            workflow_logger.log_step("expand_script", "warning", f"Expansion skipped due to LLM error: {str(e)}")
-            return script_text
-
-        expanded_text = self._extract_script_text(content)
-        if not expanded_text:
-            workflow_logger.log_step("expand_script", "warning", "Expansion returned empty output, using original script.")
-            return script_text
-
-        workflow_logger.log_step("expand_script", "success", f"New word count: {self._word_count(expanded_text)}")
-        return self._apply_script_intro(expanded_text, channel_profile or {})
 
     
     def validate_script(self, script: Any) -> Dict:

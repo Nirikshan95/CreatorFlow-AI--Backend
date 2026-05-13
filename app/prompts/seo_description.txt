@@ -26,7 +26,7 @@ You will receive channel profile context below. You MUST incorporate these eleme
 Return ONLY valid JSON in the following structure:
 {
   "hook": "Strong opening line for the first 2 rows",
-  "summary": "2-3 sentence overview of the video value",
+  "summary": "overview of the video value",
   "key_takeaways": ["First major insight", "Second major insight", "Third major insight"],
   "cta": "Engagement call-to-action (e.g. comment challenge)",
   "hashtags": ["#tag1", "#tag2", "#tag3"]

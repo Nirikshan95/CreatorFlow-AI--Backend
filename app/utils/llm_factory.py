@@ -34,13 +34,30 @@ def resolve_hf_token() -> Optional[str]:
 
 
 def extract_content(response: Any) -> str:
-    """Extract content from LLM response, handling both string and object responses."""
+    """Extract content from LLM response, handling both string and object responses.
+    
+    Handles:
+    - Plain string responses
+    - ChatMessage objects with `.content` as a string
+    - ChatMessage objects with `.content` as a list of content blocks (HuggingFace/Anthropic style)
+    """
     if response is None:
         return ""
     if isinstance(response, str):
         return response
     if hasattr(response, "content"):
-        return str(response.content)
+        content = response.content
+        # HuggingFace / Anthropic chat models can return a list of content blocks:
+        # e.g. [{'type': 'text', 'text': '...'}]
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    parts.append(str(block.get("text") or block.get("content") or ""))
+                else:
+                    parts.append(str(block))
+            return "".join(parts)
+        return str(content)
     return str(response)
 
 

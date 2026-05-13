@@ -65,9 +65,54 @@ class TopicAgent(BaseAgent):
                 break
         return out
 
+    @staticmethod
+    def build_past_topics_summary(
+        past_topics: List[str],
+        max_tokens: int = 320,
+        max_items: int = 16
+    ) -> str:
+        """Build a compact, deterministic summary bounded by an approximate token budget."""
+        if not past_topics:
+            return "No prior topics recorded."
+
+        # Approximate tokenizer budget: ~0.75 words/token.
+        word_budget = max(40, int(max_tokens * 0.75))
+        clean: List[str] = []
+        seen = set()
+        for topic in past_topics:
+            text = re.sub(r"\s+", " ", str(topic or "").strip())
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(text)
+
+        selected = clean[: max(1, max_items)]
+        lines: List[str] = []
+        words_used = 0
+        for idx, topic in enumerate(selected, start=1):
+            item = f"{idx}. {topic}"
+            item_words = len(item.split())
+            if lines and words_used + item_words > word_budget:
+                break
+            lines.append(item)
+            words_used += item_words
+
+        remaining = max(0, len(clean) - len(lines))
+        if remaining:
+            tail = f"... +{remaining} more previously covered topics"
+            tail_words = len(tail.split())
+            if words_used + tail_words <= word_budget:
+                lines.append(tail)
+
+        return "\n".join(lines) if lines else "No prior topics recorded."
+
     async def generate_topics(
         self, 
         past_topics: List[str],
+        past_topics_summary: str = "",
         num_topics: int = 5,
         category: str | None = None,
         channel_profile: Dict | None = None
@@ -106,9 +151,14 @@ class TopicAgent(BaseAgent):
                 }
             ]
         
-        past_topics_text = "\n".join(f"- {topic}" for topic in past_topics[:30]) or "- None"
+        compact_memory = (past_topics_summary or "").strip() or self.build_past_topics_summary(past_topics)
         category_hint = category or "general trending interest"
-        rendered_system_prompt = (self.system_prompt or "").replace("{num_topics}", str(num_topics))
+        rendered_system_prompt = (
+            (self.system_prompt or "")
+            .replace("{num_topics}", str(num_topics))
+            .replace("{category}", category_hint)
+            .replace("{past_topics_summary}", compact_memory)
+        )
         
         from ..utils.channel_profile import build_channel_context_text
         channel_context = build_channel_context_text(channel_profile or {})
@@ -119,8 +169,8 @@ class TopicAgent(BaseAgent):
                 f"Generate exactly {num_topics} fresh video topics.\n"
                 f"Category preference: {category_hint}\n\n"
                 f"{channel_context}\n\n"
-                "Previously covered topics to avoid repeating:\n"
-                f"{past_topics_text}"
+                "Previously covered topics summary to avoid repeating:\n"
+                f"{compact_memory}"
             ))
         ]
         

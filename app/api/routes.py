@@ -93,6 +93,21 @@ async def get_past_topics():
         db.close()
 
 
+@router.get("/past-topics-summary", response_model=Dict)
+async def get_past_topics_summary():
+    db = SessionLocal()
+    try:
+        history = db.query(ContentHistory).order_by(ContentHistory.created_at.desc()).limit(50).all()
+        topics = [h.topic for h in history]
+        summary = topic_agent.build_past_topics_summary(topics)
+        return {
+            "summary": summary,
+            "topic_count": len(topics),
+        }
+    finally:
+        db.close()
+
+
 @router.get("/channel-profile", response_model=Dict)
 async def get_channel_profile():
     return channel_profile_store.load()
@@ -225,6 +240,10 @@ async def generate_content_stream(
                                 if isinstance(state_update, dict):
                                     aggregated_state.update(state_update)
                                 yield f"data: {json.dumps({'step': node_name, 'status': 'completed'})}\n\n"
+                                if node_name == "fetch_past_topics" and isinstance(state_update, dict):
+                                    summary = str(state_update.get("past_topics_summary") or "").strip()
+                                    if summary:
+                                        yield f"data: {json.dumps({'step': 'memory_summary', 'summary': summary})}\n\n"
                         else:
                             # Defensive fallback for non-dict stream chunks.
                             yield f"data: {json.dumps({'step': 'log', 'message': f'Unexpected stream chunk: {type(event).__name__}'})}\n\n"

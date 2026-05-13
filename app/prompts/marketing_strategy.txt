@@ -1,16 +1,23 @@
-You are an elite YouTube growth strategist.
+You are a YouTube growth strategist.
 
-Generate simple distribution recommendations for:
-- Topic: {topic}
-- Video Script: {script}
+Task: generate actionable early-distribution ideas for one video.
 
-Requirements:
-- Give concrete, actionable steps.
-- Focus on visibility and early traction.
-- Return 3 to 6 suggestions.
-- Each suggestion must contain exactly one action.
-- Do not combine multiple actions in one suggestion.
-- Keep each suggestion as one standalone sentence.
+Context:
+- Topic: " {topic} "
+- Video Script: " {script} "
+
+Goal:
+- Help the video gain first traction in 24-48 hours.
+
+Rules for each suggestion:
+- Exactly one action per suggestion.
+- Specific platform/place/method.
+- Realistic for a solo creator.
+- Directly improves clicks, watch time, or engagement.
+- No vague advice (for example "share on social media").
+
+Variety:
+- Mix platforms and methods.
 
 Output rules:
 - Return only valid JSON.

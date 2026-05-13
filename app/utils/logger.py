@@ -6,7 +6,7 @@ import uuid
 from contextvars import ContextVar
 
 class WorkflowLogger:
-    """Logger with per-generation buffers to avoid cross-request contamination."""
+    """Single-file workflow logger with per-generation in-memory buffers."""
     
     def __init__(self, log_path: str = "data/generation.log"):
         self.log_path = Path(log_path)
@@ -25,9 +25,8 @@ class WorkflowLogger:
         return resolved
 
     def _path_for_generation(self, generation_id: str) -> Path:
-        if generation_id == "global":
-            return self.log_path
-        return self.log_path.with_name(f"{self.log_path.stem}_{generation_id}{self.log_path.suffix}")
+        # Always use one shared log file on disk.
+        return self.log_path
 
     def set_current_generation(self, generation_id: str):
         self._current_generation_id.set(generation_id)
@@ -37,6 +36,8 @@ class WorkflowLogger:
         self.set_current_generation(generation_id)
         msg = f"=== New Generation Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ==="
         with self._lock:
+            # New run: clear previous in-memory buffers and start fresh.
+            self.buffers.clear()
             self.buffers[generation_id] = [msg]
         log_file = self._path_for_generation(generation_id)
         with open(log_file, "w", encoding="utf-8") as f:
@@ -72,9 +73,8 @@ class WorkflowLogger:
         return msgs
 
     def read_log(self, generation_id: Optional[str] = None) -> str:
-        """Reads log content for one generation."""
-        generation_id = self._resolve_generation_id(generation_id)
-        log_file = self._path_for_generation(generation_id)
+        """Reads current single log file content."""
+        log_file = self.log_path
         if not log_file.exists():
             return "No log file found."
         return log_file.read_text(encoding="utf-8")

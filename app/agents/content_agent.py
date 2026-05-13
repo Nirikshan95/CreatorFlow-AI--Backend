@@ -2,7 +2,6 @@ from .base_agent import BaseAgent, HumanMessage, SystemMessage
 from ..utils.llm_factory import llm_factory, extract_content
 from ..utils.prompt_loader import prompt_loader
 from ..utils.channel_profile import build_channel_context_text
-import json
 import re
 from ..utils.logger import workflow_logger
 from typing import Dict, Any, List
@@ -14,6 +13,7 @@ class ContentAgent(BaseAgent):
         self.community_prompt = prompt_loader.load_prompt("community_post")
         self.thumbnail_prompt = prompt_loader.load_prompt("thumbnail_prompt")
         self.marketing_prompt = prompt_loader.load_prompt("marketing_strategy")
+        self.post_image_prompt = prompt_loader.load_prompt("post_image_prompt")
 
     @staticmethod
     def _split_suggestion_text(value: Any) -> List[str]:
@@ -72,32 +72,40 @@ class ContentAgent(BaseAgent):
         self,
         topic: str,
         script: Any,
+        title: str = "",
+        hashtags: List[str] | None = None,
         category: str | None = None,
         channel_profile: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         if self.llm is None:
             return {
                 "post_type": "post",
-                "content": f"New video is live: {topic}. Watch now and share your take.",
-                "image_prompt": f"Social post image for {topic} with clear announcement energy"
+                "content": f"New video is live: {topic}. Watch now and share your take."
             }
 
-        script_text = script if isinstance(script, str) else json.dumps(script)
-        if len(script_text) > 4000:
-            script_text = script_text[:4000] + "..."
+        script_text = self.compact_script_context(script, max_chars=1800)
 
         if channel_profile is None:
             channel_profile = {}
         channel_profile_context = build_channel_context_text(channel_profile)
 
-        final_prompt = self.community_prompt.replace("{topic}", topic).replace("{script}", script_text)
+        final_prompt = (
+            self.community_prompt
+            .replace("{topic}", topic)
+            .replace("{title}", title)
+            .replace("{category}", category or "General")
+            .replace("{hashtags}", ", ".join(hashtags or []))
+            .replace("{script}", script_text)
+            .replace("{channel_info}", channel_profile_context)
+        )
 
         messages = [
             SystemMessage(content=final_prompt),
             HumanMessage(content=(
                 f"Topic: {topic}\n"
+                f"Title: {title}\n"
                 f"Category: {category or 'General'}\n\n"
-                f"{channel_profile_context}"
+                f"Please generate the community post now."
             ))
         ]
 
@@ -108,8 +116,7 @@ class ContentAgent(BaseAgent):
         if not isinstance(data, dict):
             return {
                 "post_type": "post",
-                "content": (content or "").strip(),
-                "image_prompt": f"Promotional image for {topic}"
+                "content": (content or "").strip()
             }
 
         post_type = str(data.get("post_type") or "post").strip().lower()
@@ -128,9 +135,35 @@ class ContentAgent(BaseAgent):
 
         return {
             "post_type": "post",
-            "content": str(data.get("content") or "").strip(),
-            "image_prompt": str(data.get("image_prompt") or f"Promotional image for {topic}").strip()
+            "content": str(data.get("content") or "").strip()
         }
+
+    async def generate_post_image_prompt(self, topic: str, script: Any, post_text: str) -> Dict[str, str]:
+        if self.llm is None:
+            return {"post_image_prompt": f"Social post image for {topic}"}
+
+        script_text = self.compact_script_context(script, max_chars=1400)
+
+        final_prompt = (
+            self.post_image_prompt
+            .replace("{topic}", topic)
+            .replace("{script}", script_text)
+            .replace("{post_text}", post_text)
+        )
+
+        messages = [
+            SystemMessage(content=final_prompt),
+            HumanMessage(content=f"Please generate the post image prompt for this post: {post_text}")
+        ]
+
+        response = await llm_factory.ainvoke_with_retry(self.llm, messages)
+        content = extract_content(response).strip()
+
+        data = self.parse_json(content)
+        if isinstance(data, dict) and isinstance(data.get("post_image_prompt"), str):
+            return {"post_image_prompt": data["post_image_prompt"].strip()}
+
+        return {"post_image_prompt": (content or "").strip()}
 
     async def generate_thumbnail_prompts(
         self,
@@ -143,9 +176,7 @@ class ContentAgent(BaseAgent):
         if self.llm is None:
             return {"thumbnail_prompt": f"YouTube thumbnail prompt for {topic} with title {title}"}
 
-        script_text = script if isinstance(script, str) else json.dumps(script)
-        if len(script_text) > 3000:
-            script_text = script_text[:3000] + "..."
+        script_text = self.compact_script_context(script, max_chars=1400)
 
         if channel_profile is None:
             channel_profile = {}
@@ -183,9 +214,7 @@ class ContentAgent(BaseAgent):
         if self.llm is None:
             return {"suggestions": []}
 
-        script_text = script if isinstance(script, str) else json.dumps(script)
-        if len(script_text) > 6000:
-            script_text = script_text[:6000] + "..."
+        script_text = self.compact_script_context(script, max_chars=2200)
 
         if channel_profile is None:
             channel_profile = {}

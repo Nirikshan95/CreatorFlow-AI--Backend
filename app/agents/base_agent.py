@@ -10,6 +10,41 @@ class BaseAgent:
     """Base class for all agents providing common utilities"""
 
     @staticmethod
+    def compact_script_context(script: Any, max_chars: int = 1600) -> str:
+        """Compress long script input to high-signal snippets for downstream prompts."""
+        if script is None:
+            return "No script provided."
+
+        if isinstance(script, str):
+            raw = script
+        else:
+            try:
+                raw = json.dumps(script, ensure_ascii=False)
+            except Exception:
+                raw = str(script)
+
+        text = re.sub(r"\s+", " ", (raw or "")).strip()
+        if not text:
+            return "No script provided."
+
+        if len(text) <= max_chars:
+            return text
+
+        head_len = max(450, int(max_chars * 0.4))
+        tail_len = max(300, int(max_chars * 0.25))
+        middle_len = max_chars - head_len - tail_len
+        if middle_len < 120:
+            middle_len = 120
+            tail_len = max(220, max_chars - head_len - middle_len)
+
+        mid_start = max(0, (len(text) - middle_len) // 2)
+        middle = text[mid_start : mid_start + middle_len]
+        return (
+            f"{text[:head_len]} ... [condensed] ... "
+            f"{middle} ... [condensed] ... {text[-tail_len:]}"
+        )
+
+    @staticmethod
     def _extract_json_candidates(content: str) -> list[str]:
         """Extract likely JSON payload candidates from free-form LLM output."""
         candidates: list[str] = []
@@ -73,8 +108,8 @@ class BaseAgent:
         if not text:
             return text
 
-        # Some models prefix with a lone "json" token.
-        text = re.sub(r"^\s*json\s*", "", text, flags=re.IGNORECASE).strip()
+        # Remove common preambles.
+        text = re.sub(r"^(?:Here is the (?:JSON|output):?|json|)\s*", "", text, flags=re.IGNORECASE).strip()
 
         # Normalize smart quotes commonly returned by chat models.
         text = (
@@ -83,6 +118,9 @@ class BaseAgent:
             .replace("\u2018", "'")
             .replace("\u2019", "'")
         )
+
+        # NOTE: We intentionally do NOT do naive single-quote→double-quote replacement
+        # because it corrupts apostrophes inside string values (e.g. "Don't" becomes invalid).
 
         # Remove trailing commas before object/array close.
         text = re.sub(r",\s*([}\]])", r"\1", text)
@@ -103,5 +141,6 @@ class BaseAgent:
             except Exception:
                 continue
 
-        logger.error("JSON parsing error: unable to decode model response")
+        snippet = (content or "")[:300].replace("\n", " ")
+        logger.error(f"JSON parsing error: unable to decode model response. Raw content preview: {snippet!r}")
         return None
