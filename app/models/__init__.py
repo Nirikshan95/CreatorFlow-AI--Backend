@@ -17,7 +17,7 @@ class ContentHistory(Base):
     keywords = Column(JSON, nullable=False)
     title = Column(String, nullable=False)
     script_summary = Column(Text, nullable=True)
-    script_data = Column(JSON, nullable=True)
+    script_data = Column(Text, nullable=True)
     seo_data = Column(JSON, nullable=True)
     community_post = Column(JSON, nullable=True)
     thumbnail_prompt = Column(JSON, nullable=True)

@@ -208,6 +208,7 @@ async def generate_content_stream(
         
         try:
             aggregated_state = {}
+            final_sent = False
             # Stream node-level updates so SSE can reflect step progress deterministically.
             stream = workflow.graph.astream(
                 initial_state,
@@ -244,6 +245,12 @@ async def generate_content_stream(
                                     summary = str(state_update.get("past_topics_summary") or "").strip()
                                     if summary:
                                         yield f"data: {json.dumps({'step': 'memory_summary', 'summary': summary})}\n\n"
+                                # Emit final event immediately once save_to_database provides video_id
+                                if node_name == "save_to_database" and isinstance(state_update, dict):
+                                    fc = state_update.get("final_content") or {}
+                                    if fc.get("video_id"):
+                                        yield f"data: {json.dumps({'step': 'final', 'data': fc})}\n\n"
+                                        final_sent = True
                         else:
                             # Defensive fallback for non-dict stream chunks.
                             yield f"data: {json.dumps({'step': 'log', 'message': f'Unexpected stream chunk: {type(event).__name__}'})}\n\n"
@@ -260,9 +267,10 @@ async def generate_content_stream(
                     
             # Stream loop finished (workflow ended)
             final_content = aggregated_state.get("final_content")
-            if final_content:
+            if final_content and not final_sent:
+                # Fallback: emit final if save_to_database didn't trigger it above
                 yield f"data: {json.dumps({'step': 'final', 'data': final_content})}\n\n"
-            else:
+            elif not final_content:
                 errors = aggregated_state.get("errors", [])
                 err_msg = "; ".join(errors) if errors else "Generation process aborted before completion."
                 yield f"data: {json.dumps({'step': 'error', 'message': err_msg})}\n\n"
@@ -314,7 +322,6 @@ async def get_content_by_id(video_id: str):
             "novelty_score": content.novelty_score,
             "virality_score": content.virality_score,
             "critique": content.critique_data,
-            "quality_assessment": content.critique_data,
             "created_at": content.created_at.isoformat()
 
         }

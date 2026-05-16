@@ -21,7 +21,7 @@ Requirements:
 - Keep curiosity active with pattern breaks, questions, and reveals.
 - End with a clear CTA (comment, subscribe, or reflection).
 - Avoid fluff, repetition, robotic tone, and generic advice.
-- Length: 600-800 words.
+- Length: don't make it short.
 
 Output rules:
 - Return script text only.
